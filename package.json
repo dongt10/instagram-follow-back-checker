@@ -1,0 +1,23 @@
+{
+  "name": "instagram-follow-back-checker",
+  "version": "1.0.0",
+  "description": "A browser script that checks which Instagram accounts do not follow you back.",
+  "author": "dongt10",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dongt10/instagram-follow-back-checker.git"
+  },
+  "type": "module",
+  "private": false,
+  "scripts": {
+    "check": "node --check src/check-follow-back.js && node scripts/verify-bookmarklet.mjs"
+  },
+  "keywords": [
+    "instagram",
+    "followers",
+    "following",
+    "bookmarklet",
+    "javascript"
+  ]
+}
