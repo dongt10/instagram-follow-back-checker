@@ -1,6 +1,6 @@
 (() => {
-  const PAGE_SIZE = 50;
-  const MAX_PAGES = 40;
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 80;
   const REQUEST_DELAY_MS = 250;
   const INSTAGRAM_WEB_APP_ID = "936619743392459";
   const RESERVED_PATHS = new Set([
@@ -14,6 +14,7 @@
   ]);
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const normalizeUsername = (username) => String(username || "").trim().toLowerCase();
 
   async function getJson(url) {
     const response = await fetch(url, {
@@ -34,10 +35,46 @@
     const usersByName = new Map();
 
     for (const user of users) {
-      usersByName.set(user.username.toLowerCase(), user);
+      usersByName.set(normalizeUsername(user.username), user);
     }
 
     return [...usersByName.values()];
+  }
+
+  function formatAccount(account) {
+    if (!account.full_name) {
+      return account.username;
+    }
+
+    return `${account.username} - ${account.full_name}`;
+  }
+
+  function getFollowsViewerStatus(account) {
+    const friendshipStatus = account.friendship_status || {};
+    const possibleValues = [
+      friendshipStatus.followed_by,
+      friendshipStatus.followedBy,
+      account.follows_viewer,
+      account.followsViewer,
+    ];
+
+    for (const value of possibleValues) {
+      if (typeof value === "boolean") {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  async function loadSignedInUsername() {
+    try {
+      const currentUser = await getJson("/api/v1/accounts/current_user/?edit=true");
+
+      return currentUser.user?.username || currentUser.username || "";
+    } catch {
+      return "";
+    }
   }
 
   function getTargetUsername() {
@@ -113,35 +150,77 @@
     );
 
     const user = profile.data.user;
-    const [following, followers] = await Promise.all([
+    const [signedInUsername, following, followers] = await Promise.all([
+      loadSignedInUsername(),
       loadRelationshipList("following", user.id),
       loadRelationshipList("followers", user.id),
     ]);
 
     const followersByUsername = new Set(
-      followers.map((follower) => follower.username.toLowerCase()),
+      followers.map((follower) => normalizeUsername(follower.username)),
     );
 
-    const notFollowingBack = following
-      .filter((account) => !followersByUsername.has(account.username.toLowerCase()))
-      .map((account) => {
-        if (!account.full_name) {
-          return account.username;
+    const targetIsSignedInUser =
+      !signedInUsername ||
+      normalizeUsername(signedInUsername) === normalizeUsername(user.username);
+    const notFollowingBack = [];
+    const correctedFollowerPageMisses = [];
+    let relationshipStatusChecks = 0;
+    let followerListOnlyChecks = 0;
+
+    for (const account of following) {
+      const listedInFollowers = followersByUsername.has(normalizeUsername(account.username));
+      const relationshipStatus = targetIsSignedInUser
+        ? getFollowsViewerStatus(account)
+        : null;
+
+      if (relationshipStatus === null) {
+        followerListOnlyChecks += 1;
+
+        if (!listedInFollowers) {
+          notFollowingBack.push(formatAccount(account));
         }
 
-        return `${account.username} - ${account.full_name}`;
-      });
+        continue;
+      }
+
+      relationshipStatusChecks += 1;
+
+      if (relationshipStatus || listedInFollowers) {
+        if (relationshipStatus && !listedInFollowers) {
+          correctedFollowerPageMisses.push(formatAccount(account));
+        }
+
+        continue;
+      }
+
+      notFollowingBack.push(formatAccount(account));
+    }
 
     renderReport(
       [
         `username ${user.username}`,
+        `signed in as ${signedInUsername || "unknown"}`,
         `profile following ${user.edge_follow.count}`,
         `profile followers ${user.edge_followed_by.count}`,
         `loaded unique following ${following.length}`,
         `loaded unique followers ${followers.length}`,
+        `relationship status checks ${relationshipStatusChecks}`,
+        `followers-list only checks ${followerListOnlyChecks}`,
+        `corrected follower-page misses ${correctedFollowerPageMisses.length}`,
         `not following back ${notFollowingBack.length}`,
+        targetIsSignedInUser
+          ? ""
+          : "note relationship status was skipped because this is not the signed-in profile",
         "",
         ...notFollowingBack,
+        ...(correctedFollowerPageMisses.length
+          ? [
+              "",
+              "followers page missed these, but relationship status says they follow back:",
+              ...correctedFollowerPageMisses,
+            ]
+          : []),
       ].join("\n"),
     );
   }
